@@ -5,8 +5,14 @@ import Http._
 import liftjson._
 import Js._
 import org.apache.http.client.methods._
+import net.liftweb.json.JsonDSL._
+import net.liftweb.json.JsonAST._
+import net.liftweb.json.Printer
 
 object Terrastore {
+  /*
+  Parameter types
+   */
   implicit def _queryable(value:String) = new Queryable(value:String)
 
   implicit def _limit(value:Int) = new Limit(value)
@@ -24,39 +30,46 @@ object Terrastore {
   implicit def _endKey(value:String) = new EndKey(value)
   implicit def _timeToLive(value:Int) = new TimeToLive(value)
 
+  /*
+  Query
+   */
   def export = new EmptyExport
   def `import` = new EmptyImport
   def update = new EmptyUpdate
   def range = new EmptyRangeQuery
   def predicate = new EmptyPredicateQuery
+
+  /*
+  Json
+   */
+  implicit def _pretty(json:JValue) = new PrettyJson(json)
+  implicit def _compact(json:JValue) = new CompactJson(json)
 }
 
-class Terrastore(request:Request){
+class PrettyJson(json:JValue){
+  def pretty = Printer.pretty(render(json))
+}
+class CompactJson(json:JValue){
+  def compact = Printer.compact(render(json))
+}
+
+class Terrastore(request:Request, val http:Http = Http){
   def this(host:String, port:Int) = this(:/(host, port))
 
-  def apply(complete:CompleteUnit){
-    Http( complete( request ) >| )
-  }
+  def apply(complete:CompleteUnit) = http( complete( request ) >| )
 
-  def apply(complete:CompleteList) = {
-    Http( complete( request ) ># { js => js } ) //jvList combinators ?
-  }
-
-  def apply(complete:CompleteOption) = {
-    Http( complete( request ) ># { js => js } )
-  }
+  def apply(complete:CompleteReturn) = http( complete( request ) ># { js => js })
 }
 
 sealed trait Complete extends (Request => Request)
-trait CompleteList extends Complete
+trait CompleteReturn extends Complete
 trait CompleteUnit extends Complete
-trait CompleteOption extends Complete
 /*
 Complete
  */
 
-class PutDocument(bucket:String, document_key:String, predicate:Option[Predicate], document:Doc) extends CompleteUnit {
-  def apply(request:Request) = PUT(request) / bucket / document_key <<? Map(predicate.toList :_*) <<< document
+class PutDocument(bucket:String, document_key:String, predicate:Option[Predicate], document:JValue) extends CompleteUnit {
+  def apply(request:Request) = PUT(request) / bucket / document_key <<? Map(predicate.toList :_*) <<< compact(render(document))
 }
 
 class DeleteBucket(bucket:String) extends CompleteUnit {
@@ -69,7 +82,7 @@ class DeleteDocument(bucket:String, document_key:String) extends CompleteUnit {
   def apply(request:Request) = DELETE(request) / bucket / document_key
 }
 
-class GetBucket(bucket:String) extends CompleteList {
+class GetBucket(bucket:String) extends CompleteReturn {
   def / (document_key:String) = new GetDocument(bucket, document_key)
   def / (predicate:DocumentWithPredicate) = new GetDocument(bucket, predicate.document_key, predicate.predicate)
   def / (predicate:PredicateQueryParam) = new GetByPredicate(bucket, predicate.predicate)
@@ -84,11 +97,11 @@ class GetBucket(bucket:String) extends CompleteList {
 
   def apply(request:Request) = GET(request) / bucket
 }
-class GetByPredicate(bucket:String, predicate:Predicate) extends CompleteList {
+class GetByPredicate(bucket:String, predicate:Predicate) extends CompleteReturn {
   def apply(request:Request) = GET(request) / bucket / "predicate" <<? Map(predicate)
 }
 
-class GetByRange(bucket:String, parameters:RangeQueryParams) extends CompleteList {
+class GetByRange(bucket:String, parameters:RangeQueryParams) extends CompleteReturn {
 
   def this(bucket:String,
            startKey:StartKey,
@@ -111,14 +124,14 @@ class GetByRange(bucket:String, parameters:RangeQueryParams) extends CompleteLis
   def apply(request:Request) = GET(request) / bucket <<? queryParameters
 }
 
-class GetDocument(bucket:String, document_key:String, predicate:Option[Predicate]) extends CompleteOption {
+class GetDocument(bucket:String, document_key:String, predicate:Option[Predicate]) extends CompleteReturn {
   def this(bucket:String, document_key:String) = this(bucket, document_key, None)
   def this(bucket:String, document_key:String, predicate:Predicate) = this(bucket, document_key, Some(predicate))
 
   def apply(request:Request) = GET(request) / bucket / document_key <<? Map(predicate.toList :_*)
 }
 
-class GetBucketWithLimit(bucket:String, limit:Limit) extends CompleteList {
+class GetBucketWithLimit(bucket:String, limit:Limit) extends CompleteReturn {
   def apply(request:Request) = GET(request) / bucket <<? Map(limit)
 }
 
@@ -153,7 +166,7 @@ object DELETE extends Method {
 }
 
 object GET extends Method {
-  object / extends CompleteList {
+  object / extends CompleteReturn {
     def apply(request:Request) = GET(request)
   }
   def / (bucket:String) = new GetBucket(bucket)
@@ -298,7 +311,5 @@ class PostDocumentUpdateTimeout(bucket:String, document_key:String, timeout:Time
 }
 
 class PutMissingDocument(bucket:String, document_key:String, predicate:Option[Predicate]) {
-  def <<< (document:Doc) = new PutDocument(bucket:String, document_key:String, predicate:Option[Predicate], document:Doc)
+  def <<< (document:JValue) = new PutDocument(bucket:String, document_key:String, predicate:Option[Predicate], document:JValue)
 }
-
-trait Doc

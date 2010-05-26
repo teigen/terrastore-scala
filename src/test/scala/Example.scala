@@ -2,6 +2,7 @@ package example
 
 import terrastore._
 import Terrastore._
+import net.liftweb.json.JsonDSL._
 
 trait Example {
   val bucket_name = "bucket_name"
@@ -15,9 +16,10 @@ trait Example {
   val function_name = "function_name"
   val secret_key = "secret_key"
   val file_name = "file_name"
-  val document = new Doc{}
+  val document = ("a" -> 1) ~ ("b" -> 2)
 
   val terrastore = new Terrastore("localhost", 8080)
+
 
   // *** BUCKET MANAGEMENT ***
 
