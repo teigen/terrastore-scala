@@ -1,315 +1,79 @@
-package terrastore
+package com.jteigen.terrastore
 
 import dispatch._
 import Http._
 import liftjson._
 import Js._
-import org.apache.http.client.methods._
-import net.liftweb.json.JsonDSL._
 import net.liftweb.json.JsonAST._
-import net.liftweb.json.Printer
+import net.liftweb.json.JsonDSL._
 
-object Terrastore {
-  /*
-  Parameter types
-   */
-  implicit def _queryable(value:String) = new Queryable(value:String)
-
-  implicit def _limit(value:Int) = new Limit(value)
-
-  implicit def _secret(value:String) = new Secret(value)
-  implicit def _destination(value:String) = new Destination(value)
-  implicit def _source(value:String) = new Source(value)
-
-  implicit def _function(value:String) = new UpdateFunction(value)
-  implicit def _timeout(value:Int) = new Timeout(value)
-
-  implicit def _comparator(value:String) = new Comparator(value)
-  implicit def _predicate(value:String) = new Predicate(value)
-  implicit def _startKey(value:String) = new StartKey(value)
-  implicit def _endKey(value:String) = new EndKey(value)
-  implicit def _timeToLive(value:Int) = new TimeToLive(value)
-
-  /*
-  Query
-   */
-  def export = new EmptyExport
-  def `import` = new EmptyImport
-  def update = new EmptyUpdate
-  def range = new EmptyRangeQuery
-  def predicate = new EmptyPredicateQuery
-
-  /*
-  Json
-   */
-  implicit def _pretty(json:JValue) = new PrettyJson(json)
-  implicit def _compact(json:JValue) = new CompactJson(json)
+object Terrastore{
+  def apply(hostname:String, port:Int) = new Request(:/(hostname, port)) with Terrastore
 }
 
-class PrettyJson(json:JValue){
-  def pretty = Printer.pretty(render(json))
-}
-class CompactJson(json:JValue){
-  def compact = Printer.compact(render(json))
-}
+trait Terrastore extends Request {
+  val bucket_names = this ># (ary >>~> str)
 
-class Terrastore(request:Request, val http:Http = Http){
-  def this(host:String, port:Int) = this(:/(host, port))
-
-  def apply(complete:CompleteUnit) = http( complete( request ) >| )
-
-  def apply(complete:CompleteReturn) = http( complete( request ) ># { js => js })
+  abstract override def / (bucket_name:String) = new Request(super./(bucket_name)) with Bucket
 }
 
-sealed trait Complete extends (Request => Request)
-trait CompleteReturn extends Complete
-trait CompleteUnit extends Complete
-/*
-Complete
- */
-
-class PutDocument(bucket:String, document_key:String, predicate:Option[Predicate], document:JValue) extends CompleteUnit {
-  def apply(request:Request) = PUT(request) / bucket / document_key <<? Map(predicate.toList :_*) <<< compact(render(document))
+trait Where extends Request {
+  def where(predicate:String) = this / "predicate" <<? Map("predicate" -> predicate)
 }
 
-class DeleteBucket(bucket:String) extends CompleteUnit {
-  def / (document_key:String) = new DeleteDocument(bucket, document_key)
+trait TakeWhere extends Where with Take {
+  override def where(predicate:String) = new Request(super.where(predicate)) with Take
 
-  def apply(request:Request) = DELETE(request) / bucket
+  override def take(limit:Long) = new Request(super.take(limit)) with Where
 }
 
-class DeleteDocument(bucket:String, document_key:String) extends CompleteUnit {
-  def apply(request:Request) = DELETE(request) / bucket / document_key
+trait Take extends Request {
+  def take(limit:Long) = new Request(this <<? Map("limit" -> limit.toString))
 }
 
-class GetBucket(bucket:String) extends CompleteReturn {
-  def / (document_key:String) = new GetDocument(bucket, document_key)
-  def / (predicate:DocumentWithPredicate) = new GetDocument(bucket, predicate.document_key, predicate.predicate)
-  def / (predicate:PredicateQueryParam) = new GetByPredicate(bucket, predicate.predicate)
+trait Bucket extends Request with Take with Where {
+  val remove = DELETE >|
 
-  def /(range: RangeQueryParams) = new GetByRange(bucket,
-    range.startKey,
-    range.endKey,
-    range.comparator,
-    range.timeToLive,
-    range.limit,
-    range.predicate)
-
-  def apply(request:Request) = GET(request) / bucket
-}
-class GetByPredicate(bucket:String, predicate:Predicate) extends CompleteReturn {
-  def apply(request:Request) = GET(request) / bucket / "predicate" <<? Map(predicate)
-}
-
-class GetByRange(bucket:String, parameters:RangeQueryParams) extends CompleteReturn {
-
-  def this(bucket:String,
-           startKey:StartKey,
-           endKey:Option[EndKey] = None,
-           comparator:Option[Comparator] = None,
-           timeToLive:Option[TimeToLive] = None,
-           limit:Option[Limit] = None,
-           predicate:Option[Predicate] = None) =
-    this(bucket, new RangeQueryParams(startKey, endKey, comparator, timeToLive, limit, predicate))
-
-  def & (startKey:StartKey) = new GetByRange(bucket, parameters & (startKey=startKey))
-  def & (endKey:EndKey) = new GetByRange(bucket, parameters & (endKey=endKey))
-  def & (comparator:Comparator) = new GetByRange(bucket, parameters & (comparator=comparator))
-  def & (timeToLive:TimeToLive) = new GetByRange(bucket, parameters & (timeToLive=timeToLive))
-  def & (limit:Limit) = new GetByRange(bucket, parameters & (limit=limit))
-  def & (predicate:Predicate) = new GetByRange(bucket, parameters & (predicate=predicate))
-
-  private def queryParameters = Map(parameters.startKey) ++ parameters.endKey ++ parameters.comparator ++ parameters.timeToLive ++ parameters.limit ++ parameters.predicate 
-
-  def apply(request:Request) = GET(request) / bucket <<? queryParameters
-}
-
-class GetDocument(bucket:String, document_key:String, predicate:Option[Predicate]) extends CompleteReturn {
-  def this(bucket:String, document_key:String) = this(bucket, document_key, None)
-  def this(bucket:String, document_key:String, predicate:Predicate) = this(bucket, document_key, Some(predicate))
-
-  def apply(request:Request) = GET(request) / bucket / document_key <<? Map(predicate.toList :_*)
-}
-
-class GetBucketWithLimit(bucket:String, limit:Limit) extends CompleteReturn {
-  def apply(request:Request) = GET(request) / bucket <<? Map(limit)
-}
-
-class PostUpdateFunction(bucket:String, document_key:String, function:UpdateFunction, timeout:Timeout, values:Map[String, Any]) extends CompleteUnit {
-  def this(bucket:String, document_key:String, function:UpdateFunction, timeout:Timeout) =
-    this(bucket, document_key, function, timeout, Map.empty)
-  /* ^ was chosen because it has lower precedence than & */
-  def ^ (parameters:Map[String, Any]) = new PostUpdateFunction(bucket, document_key, function, timeout, values ++ parameters)
-  def apply(request:Request) = POST(request) / bucket / document_key <<? Map(function, timeout) << values
-}
-
-class Export(bucket:String, destination:Destination, secret:Secret) extends CompleteUnit {
-  def apply(request:Request) = POST(request) / bucket / "export" <<? Map(destination, secret)
-}
-class Import(bucket:String, source:Source, secret:Secret) extends CompleteUnit {
-  def apply(request:Request) = POST(request) / bucket / "import" <<? Map(source, secret)
-}
-
-sealed trait Method {
-  protected def method:HttpRequestBase
-  def apply(request:Request) = request.next{ Request.mimic( method )_ } <:< Map("Content-Type" -> "application/json")
-}
-
-object PUT extends Method {
-  def / (bucket:String) = new PutBucket(bucket)
-  override def method = new HttpPut
-}
-
-object DELETE extends Method {
-  def / (bucket:String) = new DeleteBucket(bucket)
-  override def method = new HttpDelete
-}
-
-object GET extends Method {
-  object / extends CompleteReturn {
-    def apply(request:Request) = GET(request)
+  def range(startKey:String, endKey:String = null, comparator:String = null, timeToLive:Long = -1) = {
+    val ttl = if(timeToLive == -1) None else Some(timeToLive)
+    new Request(this / "range" <<? Map("startKey" -> startKey) ++
+      Option(endKey).map("endKey" -> _) ++
+      Option(comparator).map("comparator" -> _) ++
+      ttl.map("timeToLive" -> _.toString)) with TakeWhere
   }
-  def / (bucket:String) = new GetBucket(bucket)
-  def / (bucket_with_limit:BucketWithLimit) = new GetBucketWithLimit(bucket_with_limit.bucket, bucket_with_limit.limit)
-  override def method = new HttpGet
+
+  override def / (document_key:String) = new Request(super./(document_key)) with Doc
+
+  def export(destination:String, secret:String) =
+    POST / "export" <<? Map("destination" -> destination, "secret" -> secret) >|
+
+  def `import`(source:String, secret:String) =
+    POST / "import" <<? Map("source" -> source, "secret" -> secret) >|
 }
 
-object POST extends Method {
-  def / (bucket:String) = new PostBucket(bucket)
-  override def method = new HttpPost
+case class WhereBuilder(request:Request) extends Builder[Handler[Unit]]{
+  def product = request >|
+
+  def where(predicate:String) = request <<? Map("predicate" -> predicate)
 }
 
+trait Doc extends Request {
+  private val json = Map("Content-Type" -> "application/json")
+  private def as_s(json:JValue) = compact(render(json))
 
+  def <<< (js:JValue):WhereBuilder = WhereBuilder(this <<< as_s(js) <:< json)
 
-class QueryParam(key:String, value:String) extends Tuple2(key, value)
+  def where(predicate:String) = new Request(this <<? Map("predicate" -> predicate))
 
+  def update(function:String, timeout:Long, parameters:(String, JValue)*):Handler[Unit] =
+    update(function, timeout, JObject(parameters.toList.map{ case (key, value) => JField(key, value) }))
 
-class PutBucket(bucket:String) {
-  def / (document_key:String) = new PutMissingDocument(bucket, document_key, None)
-  def / (predicate:DocumentWithPredicate) = new PutMissingDocument(bucket, predicate.document_key, Some(predicate.predicate))
+  def update(function:String, timeout:Long, parameters:JObject) =
+    POST / "update" <<? Map("function" -> function, "timeout" -> timeout.toString) << as_s(parameters) <:< json  >|
+
+  def remove = DELETE >|
 }
 
-
-class DocumentWithPredicate(val document_key:String, val predicate:Predicate)
-
-
-class EmptyRangeQuery {
-  def ? (startKey:StartKey) = new RangeQueryParams(startKey, None, None, None, None, None)
-}
-class RangeQueryParams(
-        val startKey:StartKey,
-        val endKey:Option[EndKey],
-        val comparator:Option[Comparator],
-        val timeToLive:Option[TimeToLive],
-        val limit:Option[Limit],
-        val predicate:Option[Predicate]) {
-
-  private def copy(startKey:StartKey = this.startKey,
-          endKey:Option[EndKey] = this.endKey,
-          comparator:Option[Comparator] = this.comparator,
-          timeToLive:Option[TimeToLive] = this.timeToLive,
-          limit:Option[Limit] = this.limit,
-          predicate:Option[Predicate] = this.predicate) =
-    new RangeQueryParams(startKey, endKey, comparator, timeToLive, limit, predicate)
-
-  def & (startKey:StartKey) = copy(startKey = startKey)
-  def & (endKey:EndKey) = copy(endKey = Some(endKey))
-  def & (comparator:Comparator) = copy(comparator = Some(comparator))
-  def & (timeToLive:TimeToLive) = copy(timeToLive = Some(timeToLive))
-  def & (limit:Limit) = copy(limit = Some(limit))
-  def & (predicate:Predicate) = copy(predicate = Some(predicate))
-}
-
-class PredicateQueryParam(val predicate:Predicate)
-
-class EmptyPredicateQuery {
-  def ? (predicate:Predicate) = new PredicateQueryParam(predicate)
-}
+case class ErrorMessage(message:String, code:Int)
 
 
-class Queryable(value:String) {
-  def ? (limit:Limit) = new BucketWithLimit(value, limit)
-  def ? (predicate:Predicate) = new DocumentWithPredicate(value, predicate)
-}
-
-class Predicate(value:String) extends QueryParam("predicate", value)
-class BucketWithLimit(val bucket:String, val limit:Limit)
-class Limit(value:Int) extends QueryParam("limit", value.toString)
-class TimeToLive(value:Int) extends QueryParam("timeToLive", value.toString)
-class Comparator(value:String) extends QueryParam("comparator", value)
-class StartKey(value:String) extends QueryParam("startKey", value)
-class EndKey(value:String) extends QueryParam("endKey", value)
-
-
-
-class PostBucket(bucket:String) {
-  def / (export:ExportDestination) = new PostBucketExportDestination(bucket, export.destination)
-  def / (export:ExportSecret) = new PostBucketExportSecret(bucket, export.secret)
-  def / (`import`:ImportSource) = new PostBucketImportSource(bucket, `import`.source)
-  def / (`import`:ImportSecret) = new PostBucketImportSecret(bucket, `import`.secret)
-  def / (document_key:String) = new PostDocument(bucket, document_key)
-}
-
-class PostBucketExportDestination(bucket:String, destination:Destination){
-  def & (secret:Secret) = new Export(bucket, destination, secret)
-}
-class PostBucketExportSecret(bucket:String, secret:Secret) {
-  def & (destination:Destination) = new Export(bucket, destination, secret)
-}
-class PostBucketImportSource(bucket:String, source:Source) {
-  def & (secret:Secret) = new Import(bucket, source, secret)
-}
-class PostBucketImportSecret(bucket:String, secret:Secret) {
-  def & (source:Source) = new Import(bucket, source, secret)
-}
-class EmptyExport {
-  def ? (destination:Destination) = new ExportDestination(destination)
-  def ? (secret:Secret) = new ExportSecret(secret)
-}
-class ExportDestination(val destination:Destination)
-class ExportSecret(val secret:Secret)
-
-class Secret(value:String) extends QueryParam("secret", value)
-class Destination(value:String) extends QueryParam("destination", value)
-class Source(value:String) extends QueryParam("source", value)
-
-
-
-class EmptyImport {
-  def ? (source:Source) = new ImportSource(source)
-  def ? (secret:Secret) = new ImportSecret(secret)
-}
-class ImportSource(val source:Source)
-class ImportSecret(val secret:Secret)
-
-class PostDocument(bucket:String, document_key:String){
-  def / (function:UpdateFunctionOnly) = new PostDocumentUpdateFunction(bucket, document_key, function.function)
-  def / (timeout:TimeoutOnly) = new PostDocumentUpdateTimeout(bucket, document_key, timeout.timeout)
-}
-
-class EmptyUpdate {
-  def ? (function:UpdateFunction) = new UpdateFunctionOnly(function)
-  def ? (timeout:Timeout) = new TimeoutOnly(timeout)
-}
-
-class UpdateFunctionOnly(val function:UpdateFunction)
-class TimeoutOnly(val timeout:Timeout)
-
-class UpdateFunction(value:String) extends QueryParam("function", value)
-class Timeout(value:Int) extends QueryParam("timeout", value.toString)
-
-
-class PostDocumentUpdateFunction(bucket:String, document_key:String, function:UpdateFunction) {
-  def & (timeout:TimeoutWithValues) = new PostUpdateFunction(bucket:String, document_key:String, function, timeout.timeout)
-  def & (timeout:Timeout) = new PostUpdateFunction(bucket:String, document_key:String, function, timeout)
-}
-
-class TimeoutWithValues(val timeout:Timeout, values:Map[String, Any])
-
-class PostDocumentUpdateTimeout(bucket:String, document_key:String, timeout:Timeout) {
-  def & (function:UpdateFunction) = new PostUpdateFunction(bucket, document_key, function, timeout)
-}
-
-class PutMissingDocument(bucket:String, document_key:String, predicate:Option[Predicate]) {
-  def <<< (document:JValue) = new PutDocument(bucket:String, document_key:String, predicate:Option[Predicate], document:JValue)
-}
