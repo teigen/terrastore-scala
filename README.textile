@@ -1,0 +1,22 @@
+A scala client library for "Terrastore":http://code.google.com/p/terrastore/ document store
+
+h2. Requirements
+
+- sbt version 0.7.4
+- everything listed as required at "Terrastore Getting Started":http://code.google.com/p/terrastore/wiki/Getting_Started
+
+h2. Build
+
+<pre>
+  sbt update
+  sbt terrastore-install
+
+  start master & server according to "Terratore Getting Started"
+
+  sbt test
+  sbt publish-local
+</pre>
+
+h2. Usage
+
+- See src/test/TerrastoreSpecs.scala for examples
